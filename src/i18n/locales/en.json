@@ -1,0 +1,108 @@
+{
+  "nav": {
+    "brand": "Eric Chow Games"
+  },
+  "shared": {
+    "shareGame": "Share Game",
+    "linkCopied": "Link Copied! ✓",
+    "newGame": "New Game",
+    "reset": "Reset",
+    "undo": "Undo",
+    "redo": "Redo"
+  },
+  "home": {
+    "title": "Eric's Games",
+    "subtitle": "Eric's collection of games",
+    "arclight": {
+      "title": "Arclight",
+      "description": "Arclight"
+    },
+    "orapaMine": {
+      "title": "Orapa Mine",
+      "description": "Orapa Mine"
+    },
+    "orapaSpace": {
+      "title": "Orapa Space",
+      "description": "Orapa Space"
+    },
+    "rotatingRoads": {
+      "title": "Rotating Roads",
+      "description": "Rotating Roads"
+    },
+    "ricochetRobots": {
+      "title": "Ricochet Robots Hex",
+      "description": "Ricochet Robots Hex"
+    },
+    "contact": "Buy this game at Xianyu, Search for '卡坦王Eric' QQ: 961422707"
+  },
+  "arclight": {
+    "title": "Arclight",
+    "instructions": "Click a cell to reveal the gem inside. Click border circles to fire waves and discover where they exit and what color they carry.",
+    "showAnswer": "See Answer",
+    "clickAllBorders": "Click All Borders",
+    "boardAriaLabel": "Arclight puzzle board",
+    "tileAriaLabel": "Tile {{label}}",
+    "includeTransparent": "Transparent Gem Expansion",
+    "includeBlackHole": "Black Gem Expansion"
+  },
+  "orapaMine": {
+    "title": "Orapa Mine",
+    "instructions": "Click a cell to reveal the gem inside. Click border circles to fire waves and discover where they exit and what color they carry.",
+    "showAnswer": "See Answer",
+    "clickAllBorders": "Click All Borders",
+    "boardAriaLabel": "Orapa Mine puzzle board",
+    "cellAriaLabel": "Column {{col}} Row {{row}}",
+    "includeTransparent": "Transparent Gem Expansion",
+    "includeBlack": "Black Gem Expansion",
+    "includeLightBlue": "Light Blue Gem Expansion"
+  },
+  "orapaSpace": {
+    "title": "Orapa Space",
+    "instructions": "Click a cell to reveal the planet inside. Click border circles to fire waves and discover where they exit and what color they carry.",
+    "showAnswer": "See Answer",
+    "clickAllBorders": "Click All Borders",
+    "boardAriaLabel": "Orapa Space puzzle board",
+    "cellAriaLabel": "Column {{col}} Row {{row}}",
+    "includeBlackHole": "Black Hole Expansion",
+    "boardSizeLabel": "Board Size",
+    "10by8": "10 × 8",
+    "11by7": "11 × 7"
+  },
+  "rotatingRoads": {
+    "title": "Rotating Roads",
+    "instructions": "Click a tile to rotate it and change the paths. Click the right half to rotate clockwise, left half to rotate counter-clockwise. Your goal is to connect the start and end points.",
+    "showTips": "Show tips",
+    "stepsSpent_one": "You have spent {{count}} step.",
+    "stepsSpent_other": "You have spent {{count}} steps.",
+    "stepClockwiseAria": "Clockwise step on tile {{tileNo}}",
+    "stepCounterClockwiseAria": "Counter-clockwise step on tile {{tileNo}}",
+    "boardAriaLabel": "Rotating Roads puzzle board",
+    "boardSizeLabel": "Board Size",
+    "rhombic9": "Rhombic 9",
+    "rhombic16": "Rhombic 16",
+    "rhombic25": "Rhombic 25",
+    "hexagonal19": "Hexagonal 19",
+    "hexagonal37": "Hexagonal 37",
+    "solved": "Solved! 🎉"
+  },
+  "ricochetRobots": {
+    "title": "Ricochet Robots Hex",
+    "instructions": "Click a robot to select it, then click a highlighted cell to slide it in that direction. Robots slide until hitting a wall or another robot. Move the target robot (marked with its letter) to the diamond target.",
+    "solved_one": "Solved in {{count}} move! 🎉",
+    "solved_other": "Solved in {{count}} moves! 🎉",
+    "moveCount": "Moves: {{count}}",
+    "boardAriaLabel": "Ricochet Robots hex puzzle board",
+    "robotAriaLabel": "{{color}} robot",
+    "targetAriaLabel": "Target for {{color}} robot",
+    "moveAriaLabel": "Slide {{color}} robot in direction {{direction}}",
+    "stepAriaLabel": "Step {{index}}: {{color}} robot",
+    "blockedCellAriaLabel": "Blocked cell",
+    "boardSize": "Board size:",
+    "color": {
+      "red": "Red",
+      "blue": "Blue",
+      "green": "Green",
+      "yellow": "Yellow"
+    }
+  }
+}

@@ -1,0 +1,764 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { getBasicTiles, getHexCoordinatesByTileNo, getRhombicCoordinatesByTileNo } from '../engine/rotatingRoads/data';
+import { setup, traverse } from '../engine/rotatingRoads/gameManager';
+import { BoardType, TileInBoard, type Board, type PathSegment, type Step } from '../engine/rotatingRoads/models';
+import ShareButton from './shared/ShareButton';
+import StepSvg from './shared/StepSvg';
+
+const SVG_W = 700;
+const SVG_H = 560;
+const HEX_SIZE = 46;
+const HEX_R = 40;
+const BORDER_MARKER_DISTANCE = HEX_R + 12;
+const BORDER_MARKER_RADIUS = 14;
+const START_MARKER_COLOR = '#ffd36a';
+const END_MARKER_COLOR = '#ff4d4f';
+const ARC_UNHIGHLIGHTED_COLOR = '#9de7ff';
+const SOLVED_ARC_COLOR = '#00e676';
+const SOLVED_ORB_COLOR = '#ffffff';
+const SOLVED_ORB_RADIUS = 5;
+const BOARD_BACKGROUND_COLOR = '#081826';
+const ROTATION_ANIMATION_DURATION_MS = 500;
+const VICTORY_ANIMATION_DURATION = '2s';
+const HEX_ARC_RADIUS_TIGHT = HEX_R / 2;
+const HEX_ARC_RADIUS_MEDIUM = Math.sqrt((3 / 4) * HEX_R * HEX_R - (3 / 2) * HEX_R * HEX_SIZE + 3 * HEX_SIZE * HEX_SIZE);
+const HEX_DIRECTION_COUNT = 6;
+const DEGREES_PER_HEX_ROTATION = 60;
+const HEX_VERTEX_TOP = 0;
+const HEX_VERTEX_UPPER_RIGHT = 1;
+const HEX_VERTEX_LOWER_RIGHT = 2;
+const HEX_VERTEX_BOTTOM = 3;
+const HEX_VERTEX_LOWER_LEFT = 4;
+const HEX_VERTEX_UPPER_LEFT = 5;
+
+const DIR_DEG: Record<number, number> = {
+  0: 180, 1: 240, 2: 300, 3: 0, 4: 60, 5: 120,
+};
+
+const BOARD_LENGTH_BY_TYPE: Record<BoardType, number> = {
+  [BoardType.Rhombic9]: 3,
+  [BoardType.Rhombic16]: 4,
+  [BoardType.Rhombic25]: 5,
+  [BoardType.Hexagonal19]: -1,
+  [BoardType.Hexagonal37]: -1,
+};
+
+const HEX_RADIUS_BY_TYPE: Record<BoardType, number> = {
+  [BoardType.Rhombic9]: -1,
+  [BoardType.Rhombic16]: -1,
+  [BoardType.Rhombic25]: -1,
+  [BoardType.Hexagonal19]: 2,
+  [BoardType.Hexagonal37]: 3,
+};
+
+const BOARD_OPTIONS = [
+  BoardType.Rhombic9,
+  BoardType.Rhombic16,
+  BoardType.Rhombic25,
+  BoardType.Hexagonal19,
+  BoardType.Hexagonal37,
+] as const;
+const BASIC_TILES = getBasicTiles();
+const QUERY_PARAM_BOARD_TYPE = 'b';
+const QUERY_PARAM_TILE_TYPES = 't';
+const QUERY_PARAM_ROTATES = 'r';
+const QUERY_PARAM_START = 's';
+const QUERY_PARAM_END = 'e';
+const NON_NEGATIVE_INTEGER_PATTERN = '(0|[1-9]\\d*)';
+const TILE_BORDER_PATTERN = new RegExp(`^${NON_NEGATIVE_INTEGER_PATTERN}\\.${NON_NEGATIVE_INTEGER_PATTERN}$`);
+
+const toRawPx = (q: number, r: number) => ({
+  x: HEX_SIZE * Math.sqrt(3) * (q + r / 2),
+  y: HEX_SIZE * 1.5 * r,
+});
+
+const edgeMidForDir = (cx: number, cy: number, direction: number): { x: number; y: number; } => {
+  const angle = (Math.PI / 180) * DIR_DEG[direction];
+  const inradius = HEX_R * Math.sqrt(3) / 2;
+  return { x: cx + inradius * Math.cos(angle), y: cy + inradius * Math.sin(angle) };
+};
+
+const pointAlongDir = (cx: number, cy: number, direction: number, distance: number): { x: number; y: number; } => {
+  const angle = (Math.PI / 180) * DIR_DEG[direction];
+  return { x: cx + distance * Math.cos(angle), y: cy + distance * Math.sin(angle) };
+};
+
+const makeArcPath = (inDir: number, outDir: number, cx: number, cy: number): string | null => {
+  if (inDir > outDir) return null;
+  const distance = (outDir - inDir) % 6;
+
+  if (distance === 1 || distance === 5) {
+    const dir = distance === 1 ? inDir : outDir;
+    const s = edgeMidForDir(cx, cy, dir);
+    const e = edgeMidForDir(cx, cy, (dir + 1) % 6);
+    return `M${s.x.toFixed(1)},${s.y.toFixed(1)} A${HEX_ARC_RADIUS_TIGHT},${HEX_ARC_RADIUS_TIGHT} 0 0,0 ${e.x.toFixed(1)},${e.y.toFixed(1)}`;
+  }
+
+  if (distance === 2 || distance === 4) {
+    const dir = distance === 2 ? inDir : outDir;
+    const s = edgeMidForDir(cx, cy, dir);
+    const e = edgeMidForDir(cx, cy, (dir + 2) % 6);
+    return `M${s.x.toFixed(1)},${s.y.toFixed(1)} A${HEX_ARC_RADIUS_MEDIUM.toFixed(1)},${HEX_ARC_RADIUS_MEDIUM.toFixed(1)} 0 0,0 ${e.x.toFixed(1)},${e.y.toFixed(1)}`;
+  }
+
+  if (distance === 3) {
+    const s = edgeMidForDir(cx, cy, inDir);
+    const e = edgeMidForDir(cx, cy, outDir);
+    return `M${s.x.toFixed(1)},${s.y.toFixed(1)} L${e.x.toFixed(1)},${e.y.toFixed(1)}`;
+  }
+
+  return null;
+};
+
+// Build one arc segment of the directed path (from inDir to outDir) for animateMotion.
+// Includes "M" for the first segment; subsequent segments start with "L" to bridge the
+// small gap between adjacent tile edges before drawing the arc.
+const makeDirectedArcPathSegment = (
+  inDir: number, outDir: number, cx: number, cy: number, isFirst: boolean,
+): string => {
+  const s = edgeMidForDir(cx, cy, inDir);
+  const e = edgeMidForDir(cx, cy, outDir);
+  const distance = ((outDir - inDir) + 6) % 6;
+  const lead = isFirst
+    ? `M${s.x.toFixed(1)},${s.y.toFixed(1)} `
+    : `L${s.x.toFixed(1)},${s.y.toFixed(1)} `;
+
+  if (distance === 3) {
+    return `${lead}L${e.x.toFixed(1)},${e.y.toFixed(1)}`;
+  }
+  if (distance === 1 || distance === 2) {
+    const r = distance === 1 ? HEX_ARC_RADIUS_TIGHT : HEX_ARC_RADIUS_MEDIUM;
+    return `${lead}A${r.toFixed(1)},${r.toFixed(1)} 0 0,0 ${e.x.toFixed(1)},${e.y.toFixed(1)}`;
+  }
+  if (distance === 4 || distance === 5) {
+    const normalizedDistance = 6 - distance; // 5→1, 4→2
+    const r = normalizedDistance === 1 ? HEX_ARC_RADIUS_TIGHT : HEX_ARC_RADIUS_MEDIUM;
+    return `${lead}A${r.toFixed(1)},${r.toFixed(1)} 0 0,1 ${e.x.toFixed(1)},${e.y.toFixed(1)}`;
+  }
+  return lead.trimEnd();
+};
+
+const hexPoints = (cx: number, cy: number, R: number): string =>
+  Array.from({ length: HEX_DIRECTION_COUNT }, (_, k) => {
+    const a = (Math.PI / 180) * (-90 + 60 * k);
+    return `${(cx + R * Math.cos(a)).toFixed(1)},${(cy + R * Math.sin(a)).toFixed(1)}`;
+  }).join(' ');
+
+const hexVertices = (cx: number, cy: number, R: number): Array<{ x: number; y: number; }> =>
+  Array.from({ length: HEX_DIRECTION_COUNT }, (_, k) => {
+    const a = (Math.PI / 180) * (-90 + 60 * k);
+    return { x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) };
+  });
+
+const pointsToString = (points: Array<{ x: number; y: number; }>): string =>
+  points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+
+const halfHexPoints = (cx: number, cy: number, R: number, side: 'left' | 'right'): string => {
+  const vertices = hexVertices(cx, cy, R);
+  // Vertex order from hexVertices(): top, upper-right, lower-right, bottom, lower-left, upper-left.
+  if (side === 'left') {
+    return pointsToString([
+      vertices[HEX_VERTEX_TOP],
+      vertices[HEX_VERTEX_UPPER_LEFT],
+      vertices[HEX_VERTEX_LOWER_LEFT],
+      vertices[HEX_VERTEX_BOTTOM],
+      { x: cx, y: cy },
+    ]);
+  }
+  return pointsToString([
+    vertices[HEX_VERTEX_TOP],
+    { x: cx, y: cy },
+    vertices[HEX_VERTEX_BOTTOM],
+    vertices[HEX_VERTEX_LOWER_RIGHT],
+    vertices[HEX_VERTEX_UPPER_RIGHT],
+  ]);
+};
+
+const normalizeRotation = (value: number): number =>
+  ((value % HEX_DIRECTION_COUNT) + HEX_DIRECTION_COUNT) % HEX_DIRECTION_COUNT;
+
+const getSearchParams = (): URLSearchParams => {
+  if (typeof window === 'undefined') {
+    return new URLSearchParams();
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const hashQuery = window.location.hash.split('?')[1];
+  if (hashQuery) {
+    const hashParams = new URLSearchParams(hashQuery);
+    hashParams.forEach((value, key) => {
+      if (!params.has(key)) {
+        params.set(key, value);
+      }
+    });
+  }
+  return params;
+};
+
+const parseInteger = (value: string | null): number | null => {
+  if (value === null) return null;
+  if (!/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
+};
+
+const parseTileAndBorder = (value: string | null): { tileIndex: number; border: number; } | null => {
+  if (value === null) return null;
+  const match = TILE_BORDER_PATTERN.exec(value);
+  if (!match) return null;
+  const tileIndex = parseInteger(match[1]);
+  const border = parseInteger(match[2]);
+  if (tileIndex === null || border === null) return null;
+  return {
+    tileIndex,
+    border,
+  };
+};
+
+const parseBoardType = (value: string | null): BoardType | null =>
+  value !== null && BOARD_OPTIONS.includes(value as BoardType) ? value as BoardType : null;
+
+const isValidDigitSequence = (value: string | null, expectedLength: number, maxDigit: number): value is string => {
+  if (value === null || value.length !== expectedLength) return false;
+  return [...value].every(char => /^[0-9]$/.test(char) && Number(char) <= maxDigit);
+};
+
+const applyBoardEncoding = (board: Board, tileTypes: string | null, rotates: string | null): Board => {
+  const tileCount = board.tiles.length;
+  const hasTileTypes = isValidDigitSequence(tileTypes, tileCount, BASIC_TILES.length - 1);
+  const hasRotates = isValidDigitSequence(rotates, tileCount, HEX_DIRECTION_COUNT - 1);
+  if (!hasTileTypes && !hasRotates) return board;
+
+  return {
+    ...board,
+    tiles: board.tiles.map((tile, index) => {
+      const nextTile = hasTileTypes
+        ? BASIC_TILES[Number(tileTypes[index])]
+        : tile.tile;
+      const nextRotate = hasRotates
+        ? Number(rotates[index])
+        : tile.rotate;
+      return new TileInBoard({
+        tile: nextTile,
+        tileNo: tile.tileNo,
+        rotate: nextRotate,
+        edges: { ...tile.edges },
+      }).resolve_rotate();
+    }),
+  };
+};
+
+const applyBoundaryEncoding = (
+  board: Board,
+  startValue: string | null,
+  endValue: string | null,
+): Board => {
+  const tileCount = board.tiles.length;
+  const startPair = parseTileAndBorder(startValue);
+  const endPair = parseTileAndBorder(endValue);
+  const startTileIndex = startPair?.tileIndex;
+  const startTileDirection = startPair?.border;
+  const endTileIndex = endPair?.tileIndex;
+  const endTileDirection = endPair?.border;
+
+  const isValidTileIndex = (value: number | null | undefined): value is number =>
+    value !== null && value !== undefined && value >= 0 && value < tileCount;
+  const isValidDirection = (value: number | null | undefined): value is number =>
+    value !== null && value !== undefined && value >= 0 && value < HEX_DIRECTION_COUNT;
+
+  if (
+    !isValidTileIndex(startTileIndex)
+    || !isValidDirection(startTileDirection)
+    || !isValidTileIndex(endTileIndex)
+    || !isValidDirection(endTileDirection)
+  ) {
+    return board;
+  }
+
+  return {
+    ...board,
+    startTileIndex,
+    startTileDirection,
+    endTileIndex,
+    endTileDirection,
+  };
+};
+
+const getInitialStateFromQuery = (): { boardType: BoardType; board: Board; } => {
+  const params = getSearchParams();
+  const boardType = parseBoardType(params.get(QUERY_PARAM_BOARD_TYPE)) ?? BoardType.Rhombic9;
+  let board = setup(boardType);
+  board = applyBoardEncoding(
+    board,
+    params.get(QUERY_PARAM_TILE_TYPES),
+    params.get(QUERY_PARAM_ROTATES),
+  );
+  board = applyBoundaryEncoding(
+    board,
+    params.get(QUERY_PARAM_START),
+    params.get(QUERY_PARAM_END),
+  );
+  return { boardType, board };
+};
+
+const pathSegmentKey = (tileIndex: number, inDir: number, outDir: number): string => {
+  const a = Math.min(inDir, outDir);
+  const b = Math.max(inDir, outDir);
+  return `${tileIndex}-${a}-${b}`;
+};
+
+const pathSegmentToKey = (pathSegment: PathSegment): string =>
+  pathSegmentKey(pathSegment.tileIndex, pathSegment.inDir, pathSegment.outDir);
+
+const inverseRotate = (rotate: Step['rotate']): Step['rotate'] =>
+  rotate === 1 ? -1 : 1;
+
+const applyStep = (board: Board, step: Step): Board => {
+  const tileIndex = board.tiles.findIndex(tile => tile.tileNo === step.tileNo);
+  if (tileIndex < 0) return board;
+
+  const tile = board.tiles[tileIndex];
+  const nextRotate = normalizeRotation(tile.rotate + step.rotate);
+  const nextTile = new TileInBoard({
+    tile: tile.tile,
+    tileNo: tile.tileNo,
+    rotate: nextRotate,
+    edges: { ...tile.edges },
+  }).resolve_rotate();
+
+  const nextTiles = [...board.tiles];
+  nextTiles[tileIndex] = nextTile;
+
+  return {
+    ...board,
+    tiles: nextTiles,
+  };
+};
+
+export default function RotatingRoads() {
+  const { t } = useTranslation();
+  const [initialState] = useState(() => getInitialStateFromQuery());
+  const [boardType, setBoardType] = useState<BoardType>(initialState.boardType);
+  const [board, setBoard] = useState<Board>(initialState.board);
+  const [showTips, setShowTips] = useState(true);
+  const [history, setHistory] = useState<Step[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const [rotatingTile, setRotatingTile] = useState<{ tileNo: number; delta: number; } | null>(null);
+  const rotationTimeoutRef = useRef<number | null>(null);
+
+  const clearPendingRotation = useCallback(() => {
+    if (rotationTimeoutRef.current !== null) {
+      window.clearTimeout(rotationTimeoutRef.current);
+      rotationTimeoutRef.current = null;
+    }
+    setRotatingTile(null);
+  }, []);
+
+  const handleNewGame = useCallback((nextBoardType: BoardType = boardType) => {
+    clearPendingRotation();
+    setBoard(setup(nextBoardType));
+    setHistory([]);
+    setHistoryIndex(0);
+  }, [boardType, clearPendingRotation]);
+
+  const handleBoardTypeChange = useCallback((value: string) => {
+    const nextBoardType = value as BoardType;
+    setBoardType(nextBoardType);
+    handleNewGame(nextBoardType);
+  }, [handleNewGame]);
+
+  const handleRotateTile = useCallback((tileNo: number, delta: Step['rotate']) => {
+    if (rotatingTile) return;
+    setRotatingTile({ tileNo, delta });
+    const step = { tileNo, rotate: delta } as Step;
+    setHistory(prev => [...prev.slice(0, historyIndex), step]);
+    setHistoryIndex(prev => prev + 1);
+
+    rotationTimeoutRef.current = window.setTimeout(() => {
+      setBoard(prevBoard => applyStep(prevBoard, step));
+
+      setRotatingTile(null);
+      rotationTimeoutRef.current = null;
+    }, ROTATION_ANIMATION_DURATION_MS);
+  }, [historyIndex, rotatingTile]);
+
+  const handleUndo = useCallback(() => {
+    if (historyIndex === 0 || rotatingTile) return;
+    const step = history[historyIndex - 1];
+    const undoRotate = inverseRotate(step.rotate);
+    setRotatingTile({ tileNo: step.tileNo, delta: undoRotate });
+    setHistoryIndex(prev => prev - 1);
+
+    rotationTimeoutRef.current = window.setTimeout(() => {
+      setBoard(prevBoard => applyStep(prevBoard, { tileNo: step.tileNo, rotate: undoRotate }));
+
+      setRotatingTile(null);
+      rotationTimeoutRef.current = null;
+    }, ROTATION_ANIMATION_DURATION_MS);
+  }, [history, historyIndex, rotatingTile]);
+
+  const handleRedo = useCallback(() => {
+    if (historyIndex >= history.length || rotatingTile) return;
+    const step = history[historyIndex];
+    setRotatingTile({ tileNo: step.tileNo, delta: step.rotate });
+    setHistoryIndex(prev => prev + 1);
+
+    rotationTimeoutRef.current = window.setTimeout(() => {
+      setBoard(prevBoard => applyStep(prevBoard, step));
+
+      setRotatingTile(null);
+      rotationTimeoutRef.current = null;
+    }, ROTATION_ANIMATION_DURATION_MS);
+  }, [history, historyIndex, rotatingTile]);
+
+  const handleResetSteps = useCallback(() => {
+    if (historyIndex === 0 || rotatingTile) return;
+    clearPendingRotation();
+    setBoard(prevBoard => [...history.slice(0, historyIndex)].reverse().reduce(
+      (nextBoard, step) => applyStep(nextBoard, { tileNo: step.tileNo, rotate: inverseRotate(step.rotate) }),
+      prevBoard,
+    ));
+    setHistory([]);
+    setHistoryIndex(0);
+  }, [clearPendingRotation, history, historyIndex, rotatingTile]);
+
+  const handleStepClick = useCallback((index: number) => {
+    if (rotatingTile) return;
+    clearPendingRotation();
+    if (index + 1 < historyIndex) {
+      setBoard(prevBoard => [...history.slice(index + 1, historyIndex)].reverse().reduce(
+        (nextBoard, step) => applyStep(nextBoard, { tileNo: step.tileNo, rotate: inverseRotate(step.rotate) }),
+        prevBoard,
+      ));
+    } else if (index + 1 > historyIndex) {
+      setBoard(prevBoard => history.slice(historyIndex, index + 1).reduce(
+        (nextBoard, step) => applyStep(nextBoard, step),
+        prevBoard,
+      ));
+    }
+    setHistoryIndex(index + 1);
+  }, [clearPendingRotation, history, historyIndex, rotatingTile]);
+
+  useEffect(() => () => {
+    clearPendingRotation();
+  }, [clearPendingRotation]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = getSearchParams();
+    params.set(QUERY_PARAM_BOARD_TYPE, board.boardType);
+    params.set(QUERY_PARAM_TILE_TYPES, board.tiles.map(tile => String(tile.tile.id)).join(''));
+    params.set(QUERY_PARAM_ROTATES, board.tiles.map(tile => String(normalizeRotation(tile.rotate))).join(''));
+    params.set(QUERY_PARAM_START, `${board.startTileIndex}.${board.startTileDirection}`);
+    params.set(QUERY_PARAM_END, `${board.endTileIndex}.${board.endTileDirection}`);
+
+    const search = params.toString();
+    const querySuffix = search ? `?${search}` : '';
+    const hashPath = window.location.hash.split('?')[0];
+    const hasHashPathRoute = hashPath.startsWith('#/');
+    const nextUrl = hasHashPathRoute
+      ? `${window.location.pathname}${hashPath}${querySuffix}`
+      : `${window.location.pathname}${querySuffix}${hashPath}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentUrl === nextUrl) return;
+    window.history.replaceState(null, '', nextUrl);
+  }, [board]);
+
+  const boardLength = BOARD_LENGTH_BY_TYPE[board.boardType];
+  const hexRadius = HEX_RADIUS_BY_TYPE[board.boardType];
+  const tilePx = useMemo(() => {
+    const rawTiles = boardLength > 0
+      ? (() => {
+        const coordinatesByTileNo = getRhombicCoordinatesByTileNo(board.tiles.length);
+        return board.tiles.map(tile => {
+          const coordinate = coordinatesByTileNo[tile.tileNo];
+          return { tileNo: tile.tileNo, ...toRawPx(coordinate.q, coordinate.r) };
+        });
+      })()
+      : (() => {
+        const coordinatesByTileNo = getHexCoordinatesByTileNo(hexRadius);
+        return board.tiles.map(tile => {
+          const coordinate = coordinatesByTileNo[tile.tileNo];
+          return { tileNo: tile.tileNo, ...toRawPx(coordinate.q, coordinate.r) };
+        });
+      })();
+
+    const minX = Math.min(...rawTiles.map(tile => tile.x));
+    const maxX = Math.max(...rawTiles.map(tile => tile.x));
+    const minY = Math.min(...rawTiles.map(tile => tile.y));
+    const maxY = Math.max(...rawTiles.map(tile => tile.y));
+
+    const boardCenterX = (minX + maxX) / 2;
+    const boardCenterY = (minY + maxY) / 2;
+    const offsetX = SVG_W / 2 - boardCenterX;
+    const offsetY = SVG_H / 2 - boardCenterY;
+
+    return Object.fromEntries(
+      rawTiles.map(tile => [
+        tile.tileNo,
+        { x: tile.x + offsetX, y: tile.y + offsetY },
+      ]),
+    );
+  }, [boardLength, hexRadius, board.tiles]);
+
+  const startTilePosition = tilePx[board.startTileIndex];
+  const endTilePosition = tilePx[board.endTileIndex];
+  const startBorderPosition = pointAlongDir(
+    startTilePosition.x,
+    startTilePosition.y,
+    board.startTileDirection,
+    BORDER_MARKER_DISTANCE,
+  );
+  const endBorderPosition = pointAlongDir(
+    endTilePosition.x,
+    endTilePosition.y,
+    board.endTileDirection,
+    BORDER_MARKER_DISTANCE,
+  );
+  const startPathSegments = useMemo(
+    () => traverse(board, board.startTileIndex, board.startTileDirection),
+    [board],
+  );
+  const endPathSegments = useMemo(
+    () => traverse(board, board.endTileIndex, board.endTileDirection),
+    [board],
+  );
+  const startPathSegmentKeys = useMemo(
+    () => new Set(startPathSegments.map(pathSegmentToKey)),
+    [startPathSegments],
+  );
+  const endPathSegmentKeys = useMemo(
+    () => new Set(endPathSegments.map(pathSegmentToKey)),
+    [endPathSegments],
+  );
+  const steps = useMemo(
+    () => history.slice(0, historyIndex),
+    [history, historyIndex],
+  );
+
+  const isConnected = useMemo(() => {
+    if (startPathSegments.length === 0) return false;
+    const last = startPathSegments[startPathSegments.length - 1];
+    return last.tileIndex === board.endTileIndex && last.outDir === board.endTileDirection;
+  }, [startPathSegments, board.endTileIndex, board.endTileDirection]);
+
+  const connectedAnimPath = useMemo(() => {
+    if (!isConnected) return null;
+    return startPathSegments
+      .map((seg, i) => {
+        const { x: cx, y: cy } = tilePx[seg.tileIndex];
+        return makeDirectedArcPathSegment(seg.inDir, seg.outDir, cx, cy, i === 0);
+      })
+      .join(' ');
+  }, [isConnected, startPathSegments, tilePx]);
+
+  return (
+    <div className="game-container">
+      <h2 className="game-title">{t('rotatingRoads.title')}</h2>
+      <p className="status-message">{t('rotatingRoads.instructions')}</p>
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
+        <label htmlFor="rotating-roads-board-type">{t('rotatingRoads.boardSizeLabel')}</label>
+        <select
+          id="rotating-roads-board-type"
+          className="lang-switcher"
+          value={boardType}
+          onChange={(e) => handleBoardTypeChange(e.target.value)}
+        >
+          {BOARD_OPTIONS.map(option => (
+            <option key={option} value={option}>
+              {t(`rotatingRoads.${option}`)}
+            </option>
+          ))}
+        </select>
+        <button className="btn-reset" onClick={() => handleNewGame()}>
+          {t('shared.newGame')}
+        </button>
+        <button className="btn-reset" onClick={handleResetSteps} disabled={steps.length === 0 || Boolean(rotatingTile)}>
+          {t('shared.reset')}
+        </button>
+        <button className="btn-reset" onClick={handleUndo} disabled={historyIndex === 0 || Boolean(rotatingTile)}>
+          {t('shared.undo')}
+        </button>
+        <button className="btn-reset" onClick={handleRedo} disabled={historyIndex >= history.length || Boolean(rotatingTile)}>
+          {t('shared.redo')}
+        </button>
+        <ShareButton />
+        <label htmlFor="rotating-roads-show-tips" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            id="rotating-roads-show-tips"
+            type="checkbox"
+            checked={showTips}
+            onChange={(e) => setShowTips(e.target.checked)}
+          />
+          {t('rotatingRoads.showTips')}
+        </label>
+      </div>
+
+      <svg
+        width={SVG_W}
+        height={SVG_H}
+        viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+        className="game-svg"
+        aria-label={t('rotatingRoads.boardAriaLabel')}
+      >
+        <defs>
+          <filter id="orb-glow" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="4" result="coloredBlur" />
+            <feMerge>
+              <feMergeNode in="coloredBlur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <rect width={SVG_W} height={SVG_H} fill={BOARD_BACKGROUND_COLOR} rx={10} />
+
+        {board.tiles.map((tile) => {
+          const { x, y } = tilePx[tile.tileNo];
+          const isStartTile = tile.tileNo === board.startTileIndex;
+          const isEndTile = tile.tileNo === board.endTileIndex;
+          const tileAriaLabel = isStartTile
+            ? `Start tile ${tile.tileNo}`
+            : isEndTile
+              ? `End tile ${tile.tileNo}`
+              : `Tile ${tile.tileNo}`;
+          return (
+            <g key={tile.tileNo} aria-label={tileAriaLabel}>
+              <g
+                style={{
+                  transition: rotatingTile?.tileNo === tile.tileNo
+                    ? `transform ${ROTATION_ANIMATION_DURATION_MS}ms ease`
+                    : 'none',
+                  transformBox: 'fill-box',
+                  transformOrigin: 'center',
+                  transform: rotatingTile?.tileNo === tile.tileNo
+                    ? `rotate(${rotatingTile.delta * DEGREES_PER_HEX_ROTATION}deg)`
+                    : 'rotate(0deg)',
+                }}
+              >
+                <polygon
+                  points={hexPoints(x, y, HEX_R)}
+                  fill="#0b2438"
+                  stroke="#3a78a1"
+                  strokeWidth={1.5}
+                />
+                {Object.entries(tile.arcDict).map(([inDirStr, outDir]) => {
+                  const inDir = Number(inDirStr);
+                  const path = makeArcPath(inDir, outDir, x, y);
+                  if (!path) return null;
+                  const segmentKey = pathSegmentKey(tile.tileNo, inDir, outDir);
+                  const stroke = !showTips
+                    ? ARC_UNHIGHLIGHTED_COLOR
+                    : isConnected && (startPathSegmentKeys.has(segmentKey) || endPathSegmentKeys.has(segmentKey))
+                      ? SOLVED_ARC_COLOR
+                      : endPathSegmentKeys.has(segmentKey)
+                        ? END_MARKER_COLOR
+                        : startPathSegmentKeys.has(segmentKey)
+                          ? START_MARKER_COLOR
+                          : ARC_UNHIGHLIGHTED_COLOR;
+                  return (
+                    <path
+                      key={`${tile.tileNo}-${inDir}-${outDir}`}
+                      d={path}
+                      stroke={stroke}
+                      strokeWidth={2.6}
+                      fill="none"
+                      strokeLinecap="round"
+                    />
+                  );
+                })}
+                <text
+                  x={x}
+                  y={y + 0.5}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fill="#ffffff"
+                  fontWeight="bold"
+                  fontSize={12}
+                >
+                  {tile.tileNo}
+                </text>
+              </g>
+              <polygon
+                points={halfHexPoints(x, y, HEX_R, 'left')}
+                fill="#ffffff"
+                fillOpacity={0}
+                style={{ cursor: rotatingTile ? 'default' : 'pointer' }}
+                onClick={() => handleRotateTile(tile.tileNo, -1)}
+              />
+              <polygon
+                points={halfHexPoints(x, y, HEX_R, 'right')}
+                fill="#ffffff"
+                fillOpacity={0}
+                style={{ cursor: rotatingTile ? 'default' : 'pointer' }}
+                onClick={() => handleRotateTile(tile.tileNo, 1)}
+              />
+            </g>
+          );
+        })}
+
+        {[
+          { ...startBorderPosition, label: 'S', stroke: START_MARKER_COLOR },
+          { ...endBorderPosition, label: 'E', stroke: END_MARKER_COLOR },
+        ].map(({ x, y, label, stroke }) => (
+          <g key={`border-${label}`}>
+            <circle
+              cx={x}
+              cy={y}
+              r={BORDER_MARKER_RADIUS}
+              fill={BOARD_BACKGROUND_COLOR}
+              stroke={stroke}
+              strokeWidth={2.8}
+            />
+            <text
+              x={x}
+              y={y}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fill={stroke}
+              fontWeight="bold"
+              fontSize={12}
+            >
+              {label}
+            </text>
+          </g>
+        ))}
+
+        {connectedAnimPath && (
+          <circle r={SOLVED_ORB_RADIUS} fill={SOLVED_ORB_COLOR} filter="url(#orb-glow)">
+            <animateMotion
+              dur={VICTORY_ANIMATION_DURATION}
+              repeatCount="indefinite"
+              path={connectedAnimPath}
+            />
+          </circle>
+        )}
+      </svg>
+
+      <div style={{ width: '100%', maxWidth: SVG_W }}>
+        {isConnected && (
+          <p className="status-message" style={{ textAlign: 'center', color: SOLVED_ARC_COLOR, fontWeight: 'bold' }}>
+            {t('rotatingRoads.solved')}
+          </p>
+        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
+          {steps.map((step, index) => (
+            <StepSvg
+              key={index}
+              tileNo={step.tileNo}
+              rotate={step.rotate}
+              ariaLabel={step.rotate === 1
+                ? t('rotatingRoads.stepClockwiseAria', { tileNo: step.tileNo })
+                : t('rotatingRoads.stepCounterClockwiseAria', { tileNo: step.tileNo })}
+              onClick={() => handleStepClick(index)}
+            />
+          ))}
+        </div>
+        <p className="status-message" style={{ textAlign: 'center', marginTop: 8 }}>
+          {t('rotatingRoads.stepsSpent', { count: steps.length })}
+        </p>
+      </div>
+    </div>
+  );
+}
