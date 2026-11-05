@@ -1,18 +1,14 @@
-// import { render, screen } from '@testing-library/react';
-// import { MemoryRouter } from 'react-router-dom';
+import { render, screen } from '@testing-library/react';
 import { describe, it } from 'vitest';
-// import RotatingRoads from '../components/RotatingRoads';
+import App from '../App';
 
-
-describe('App', () => {
-
-  it('renders Arclight when navigating to /arclight', async () => {
-    // render(
-    //   <MemoryRouter initialEntries={['/arclight']}>
-    //     <RotatingRoads />
-    //   </MemoryRouter>,
-    // );
-    // expect(await screen.findByText('Arclight')).toBeTruthy();
+describe('App Component', () => {
+  it('renders the main heading or content correctly', () => {
+    render(<App />);
+    
+    // Replace 'Arclight' or whatever text your App component outputs by default
+    const headingElement = screen.getAllByText(/Rotating Roads/i);
+    assert(headingElement.length > 0, 'Expected to find at least one element with text "Rotating Roads"');
+    
   });
-
 });
