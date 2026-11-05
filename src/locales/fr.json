@@ -1,0 +1,32 @@
+{
+  "brand": "Eric Chow",
+  "loading": "Chargement...",
+  "hero": {
+    "eyebrow": "Démarrage de portfolio",
+    "title": "Un site moderne React + TypeScript",
+    "subtitle": "Construit avec React 19, Vite 8, routage, i18n et outils de test.",
+    "primaryCta": "Explorer",
+    "secondaryCta": "Voir la page 404"
+  },
+  "features": {
+    "react": {
+      "title": "React 19",
+      "description": "Profitez du dernier modèle de composants et des améliorations de rendu."
+    },
+    "typescript": {
+      "title": "TypeScript",
+      "description": "Assurez la sécurité des types et un meilleur confort de développement."
+    },
+    "vite": {
+      "title": "Vite 8",
+      "description": "Accélérez le développement avec une chaîne d'outils moderne."
+    }
+  },
+  "notFound": {
+    "message": "La page que vous cherchez n'existe pas.",
+    "backHome": "Retour à l'accueil"
+  },
+  "footer": {
+    "text": "Construit pour la locale {{language}}"
+  }
+}
